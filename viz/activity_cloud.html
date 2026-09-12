@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fly CNS Activity Cloud</title>
+<style>
+  :root {
+    --bg: #05070a;
+    --panel: rgba(13, 16, 21, 0.84);
+    --line: rgba(255, 255, 255, 0.08);
+    --text: #e6e8eb;
+    --muted: #8a919b;
+    --stim: #5ad1e6;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  canvas { display: block; }
+  .panel {
+    position: fixed; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  #info { top: 16px; left: 16px; width: 300px; padding: 14px 16px; max-height: calc(100% - 80px); overflow-y: auto; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .seg { display: flex; gap: 3px; padding: 3px; margin-bottom: 14px; background: rgba(255, 255, 255, 0.04); border-radius: 8px; }
+  .seg button {
+    flex: 1; padding: 6px 4px; border: 0; border-radius: 6px; background: none;
+    color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .seg button.on { background: rgba(255, 255, 255, 0.11); color: var(--text); }
+  .caption { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 6px; }
+  .bar { height: 8px; border-radius: 4px; background: linear-gradient(90deg, #3a1a0a, #a83c16, #f07a24, #ffc85a, #fff4d6); }
+  .ticks { position: relative; height: 16px; color: var(--muted); font-size: 11px; margin-top: 3px; }
+  .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .ticks span:first-child { transform: none; }
+  .ticks span:last-child { transform: translateX(-100%); }
+  .row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 4px 0; }
+  .row .n { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .stats { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; font-size: 12px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  .stats .k { color: var(--muted); }
+  input[type="text"] {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px;
+    background: rgba(0, 0, 0, 0.35); color: var(--text); font: inherit;
+  }
+  input[type="text"]:focus { outline: none; border-color: rgba(255, 255, 255, 0.25); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+  .chip {
+    padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06); color: var(--text); font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .chip:hover { background: rgba(255, 255, 255, 0.12); }
+  #match { min-height: 1.4em; margin-top: 7px; color: var(--muted); font-size: 12px; }
+  .note { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+  #tip { display: none; pointer-events: none; padding: 8px 10px; font-size: 12px; max-width: 260px; }
+  #tip b { font-weight: 600; }
+  #tip .m { color: var(--muted); }
+  #help { bottom: 16px; left: 16px; padding: 7px 12px; color: var(--muted); font-size: 12px; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; color: var(--muted); }
+  .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  #toggle {
+    flex: none; width: 24px; height: 24px; margin-top: -2px; border: 1px solid var(--line); border-radius: 6px;
+    background: rgba(255, 255, 255, 0.05); color: var(--muted); font: inherit; line-height: 1; cursor: pointer;
+  }
+  #info.collapsed #body { display: none; }
+  #info.collapsed .sub { margin-bottom: 0; }
+  @media (max-width: 700px) {
+    #info { top: 8px; left: 8px; right: 8px; width: auto; max-height: 55%; }
+    #help { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="loading">Loading 140k neurons…</div>
+
+<div id="info" class="panel">
+  <div class="head">
+    <h1>Male fly CNS · simulated activity</h1>
+    <button id="toggle" aria-label="Collapse panel">–</button>
+  </div>
+  <div class="sub" id="subtitle"></div>
+  <div id="body">
+  <div class="seg" id="modes"></div>
+  <div id="legend"></div>
+  <div class="stats" id="stats"></div>
+  <div class="caption">Highlight cell type</div>
+  <input id="search" type="text" placeholder="Type name, e.g. DNp01" autocomplete="off" spellcheck="false">
+  <div class="chips">
+    <button class="chip">DNp01</button>
+    <button class="chip">LPLC2</button>
+    <button class="chip">LC4</button>
+    <button class="chip">DNa02</button>
+  </div>
+  <div id="match"></div>
+  <div class="note" id="note"></div>
+  </div>
+</div>
+<div id="tip" class="panel"></div>
+<div id="help" class="panel">Drag to rotate · scroll to zoom · right-drag to pan · hover a neuron</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const DATA = __PAYLOAD__;
+
+function decode(b64, Type) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Type(bytes.buffer);
+}
+
+const N = DATA.count;
+const positions = decode(DATA.positions, Float32Array);
+const bodyIds = decode(DATA.bodyIds, Float64Array);
+const superclass = decode(DATA.superclass, Uint8Array);
+const typeIdx = decode(DATA.type, Uint16Array);
+const side = decode(DATA.side, Uint8Array);
+const SIDES = ["", "L", "R", "M"];
+const conditions = DATA.conditions.map(c => ({
+  name: c.name,
+  rates: decode(c.rates, Float32Array),
+  stimulated: decode(c.stimulated, Uint8Array),
+}));
+
+// ---- Colors ---------------------------------------------------------------
+const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+const HEAT = ["#3a1a0a", "#a83c16", "#f07a24", "#ffc85a", "#fff4d6"].map(hex);
+const STIM = hex("#5ad1e6");
+const IDLE = [0.035, 0.04, 0.05]; // dim: idle points stack up additively in dense regions
+const MAX_HZ = 400;
+const heatT = hz => Math.min(1, Math.log1p(hz) / Math.log1p(MAX_HZ));
+
+function heat(t, out) {
+  const x = t * (HEAT.length - 1), i = Math.min(HEAT.length - 2, Math.floor(x)), f = x - i;
+  for (let k = 0; k < 3; k++) out[k] = HEAT[i][k] + (HEAT[i + 1][k] - HEAT[i][k]) * f;
+  return out;
+}
+
+const GROUPS = [
+  { label: "Optic lobe", color: "#4f8df7", test: s => s.startsWith("ol_") || s.startsWith("visual") },
+  { label: "Central brain", color: "#3ecf8e", test: s => s.startsWith("cb_") },
+  { label: "Nerve cord", color: "#a979f5", test: s => s.startsWith("vnc_") },
+  { label: "Descending", color: "#ff9f43", test: s => s.startsWith("descending") },
+  { label: "Ascending", color: "#f062a8", test: s => s.includes("ascending") },
+  { label: "Other / unlabeled", color: "#7d8590", test: () => true },
+];
+GROUPS.forEach(g => { g.rgb = hex(g.color); g.count = 0; });
+const groupOfSuperclass = DATA.superclassNames.map(s => GROUPS.findIndex(g => g.test(s)));
+const group = new Uint8Array(N);
+for (let i = 0; i < N; i++) { group[i] = groupOfSuperclass[superclass[i]]; GROUPS[group[i]].count++; }
+
+// ---- Scene ----------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x05070a);
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 1, 20000);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute("tint", new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+geometry.setAttribute("size", new THREE.BufferAttribute(new Float32Array(N), 1));
+
+const material = new THREE.ShaderMaterial({
+  uniforms: { scale: { value: 1 } },
+  vertexShader: `
+    attribute vec3 tint;
+    attribute float size;
+    uniform float scale;
+    varying vec3 vTint;
+    void main() {
+      vTint = tint;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = max(1.5, size * scale / -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    varying vec3 vTint;
+    void main() {
+      float d = length(gl_PointCoord - 0.5);
+      if (d > 0.5) discard;
+      gl_FragColor = vec4(vTint * smoothstep(0.5, 0.05, d), 1.0);
+    }`,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  transparent: true,
+});
+const cloud = new THREE.Points(geometry, material);
+scene.add(cloud);
+
+// On wide screens, center the cloud in the space beside the panel instead of behind it.
+function panelWidth() {
+  const panel = document.getElementById("info");
+  return innerWidth > 700 && !panel.classList.contains("collapsed") ? panel.offsetWidth + 16 : 0;
+}
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.setViewOffset(innerWidth, innerHeight, -panelWidth() / 2, 0, innerWidth, innerHeight);
+  camera.updateProjectionMatrix();
+  const fov = THREE.MathUtils.degToRad(camera.fov);
+  material.uniforms.scale.value = renderer.domElement.height / (2 * Math.tan(fov / 2));
+}
+addEventListener("resize", resize);
+resize();
+
+// Start far enough back that the whole CNS fits, whatever the window's aspect ratio.
+geometry.computeBoundingBox();
+const extent = geometry.boundingBox.getSize(new THREE.Vector3());
+const halfFov = THREE.MathUtils.degToRad(camera.fov) / 2;
+const fitHalf = Math.max(extent.y / 2, extent.x / 2 / ((innerWidth - panelWidth()) / innerHeight));
+camera.position.set(0, 0, (1.15 * fitHalf) / Math.tan(halfFov) + extent.z / 2);
+
+// ---- State & painting ------------------------------------------------------
+const MODES = [...conditions.map(c => c.name), "Cell classes"];
+let mode = 0;
+let highlight = null; // Uint8Array mask or null
+
+function paint() {
+  const tint = geometry.attributes.tint.array;
+  const size = geometry.attributes.size.array;
+  const c = [0, 0, 0];
+  const cond = conditions[mode];
+  for (let i = 0; i < N; i++) {
+    let s;
+    if (cond) {
+      const hz = cond.rates[i];
+      if (cond.stimulated[i]) { c[0] = STIM[0]; c[1] = STIM[1]; c[2] = STIM[2]; s = 16; }
+      else if (hz > 1) { const t = heatT(hz); heat(t, c); s = 5 + 11 * t; }
+      else { c[0] = IDLE[0]; c[1] = IDLE[1]; c[2] = IDLE[2]; s = 2.6; }
+    } else {
+      const g = GROUPS[group[i]].rgb;
+      c[0] = g[0] * 0.5; c[1] = g[1] * 0.5; c[2] = g[2] * 0.5; s = 3.8;
+    }
+    if (highlight) {
+      if (highlight[i]) { c[0] = c[1] = c[2] = 1; s = 18; }
+      else { c[0] *= 0.3; c[1] *= 0.3; c[2] *= 0.3; }
+    }
+    tint[3 * i] = c[0]; tint[3 * i + 1] = c[1]; tint[3 * i + 2] = c[2];
+    size[i] = s;
+  }
+  geometry.attributes.tint.needsUpdate = true;
+  geometry.attributes.size.needsUpdate = true;
+  renderPanel();
+}
+
+// ---- Panel ------------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const fmt = n => n.toLocaleString("en-US");
+$("subtitle").textContent = DATA.subtitle;
+
+const info = $("info");
+function setCollapsed(collapsed) {
+  info.classList.toggle("collapsed", collapsed);
+  $("toggle").textContent = collapsed ? "+" : "–";
+  $("toggle").setAttribute("aria-label", collapsed ? "Expand panel" : "Collapse panel");
+  resize();
+}
+$("toggle").onclick = () => setCollapsed(!info.classList.contains("collapsed"));
+setCollapsed(innerWidth < 700);
+$("note").textContent =
+  `Each dot is one neuron's cell body. ${fmt(N)} of ${fmt(DATA.total)} traced neurons have one inside ` +
+  `the imaged volume; most sensory neurons' cell bodies lie outside it and aren't shown.`;
+
+MODES.forEach((name, i) => {
+  const b = document.createElement("button");
+  b.textContent = name;
+  b.onclick = () => { mode = i; paint(); };
+  $("modes").append(b);
+});
+
+const typeLookup = new Map(DATA.typeNames.map((t, i) => [t.toLowerCase(), i]));
+const giantFiber = [];
+const gfType = typeLookup.get("dnp01");
+for (let i = 0; i < N; i++) if (typeIdx[i] === gfType) giantFiber.push(i);
+
+function renderPanel() {
+  [...$("modes").children].forEach((b, i) => b.classList.toggle("on", i === mode));
+  const cond = conditions[mode];
+  if (cond) {
+    const ticks = [0, 1, 10, 100, MAX_HZ];
+    $("legend").innerHTML =
+      `<div class="bar"></div><div class="ticks">` +
+      ticks.map(v => `<span style="left:${heatT(v) * 100}%">${v}${v === MAX_HZ ? " Hz" : ""}</span>`).join("") +
+      `</div>` +
+      `<div class="row"><span class="dot" style="background:var(--stim)"></span>Stimulated</div>` +
+      `<div class="row"><span class="dot" style="background:#2a2f36"></span>Silent (≤ 1 Hz)</div>`;
+    let active = 0, stim = 0;
+    for (let i = 0; i < N; i++) {
+      if (cond.stimulated[i]) stim++;
+      else if (cond.rates[i] > 1) active++;
+    }
+    const gf = giantFiber
+      .map(i => `${SIDES[side[i]]} ${Math.round(cond.rates[i])}`)
+      .join(" · ");
+    $("stats").innerHTML =
+      `<span class="k">Stimulated</span><span>${fmt(stim)}</span>` +
+      `<span class="k">Active downstream (&gt; 1 Hz)</span><span>${fmt(active)}</span>` +
+      `<span class="k">Giant fiber DNp01 (Hz)</span><span>${gf || "—"}</span>`;
+  } else {
+    $("legend").innerHTML = GROUPS.map(g =>
+      `<div class="row"><span class="dot" style="background:${g.color}"></span>${g.label}<span class="n">${fmt(g.count)}</span></div>`
+    ).join("");
+    $("stats").innerHTML = "";
+  }
+  renderMatch();
+}
+
+// ---- Search -------------------------------------------------------------------
+let matchText = "";
+function search(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) { highlight = null; matchText = ""; paint(); return; }
+  let wanted = new Set();
+  if (typeLookup.has(q)) wanted.add(typeLookup.get(q));
+  else DATA.typeNames.forEach((t, i) => { if (i && t.toLowerCase().startsWith(q)) wanted.add(i); });
+  const mask = new Uint8Array(N);
+  let count = 0;
+  for (let i = 0; i < N; i++) if (wanted.has(typeIdx[i])) { mask[i] = 1; count++; }
+  highlight = count ? mask : null;
+  matchText = count
+    ? `${fmt(count)} neurons in ${wanted.size} type${wanted.size > 1 ? "s" : ""}`
+    : "No matching cell type";
+  paint();
+}
+
+function renderMatch() {
+  const cond = conditions[mode];
+  let extra = "";
+  if (highlight && cond) {
+    let sum = 0, n = 0;
+    for (let i = 0; i < N; i++) if (highlight[i]) { sum += cond.rates[i]; n++; }
+    extra = ` · mean ${(sum / n).toFixed(1)} Hz`;
+  }
+  $("match").textContent = matchText + extra;
+}
+
+$("search").addEventListener("input", e => search(e.target.value));
+document.querySelectorAll(".chip").forEach(chip => chip.onclick = () => {
+  $("search").value = chip.textContent;
+  search(chip.textContent);
+});
+
+// ---- Hover --------------------------------------------------------------------
+const raycaster = new THREE.Raycaster();
+raycaster.params.Points.threshold = 4;
+const pointer = new THREE.Vector2();
+let pointerDirty = false, pointerDown = false, lastEvent = null;
+
+renderer.domElement.addEventListener("pointermove", e => { lastEvent = e; pointerDirty = true; });
+renderer.domElement.addEventListener("pointerdown", () => { pointerDown = true; $("tip").style.display = "none"; });
+addEventListener("pointerup", () => { pointerDown = false; });
+renderer.domElement.addEventListener("pointerleave", () => { $("tip").style.display = "none"; });
+
+function hover() {
+  if (!pointerDirty || pointerDown || !lastEvent) return;
+  pointerDirty = false;
+  pointer.set((lastEvent.clientX / innerWidth) * 2 - 1, -(lastEvent.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObject(cloud);
+  const tip = $("tip");
+  if (!hits.length) { tip.style.display = "none"; return; }
+  const hit = hits.reduce((a, b) => (b.distanceToRay < a.distanceToRay ? b : a));
+  const i = hit.index;
+  const cond = conditions[mode];
+  const activity = !cond ? "" : cond.stimulated[i]
+    ? `<br><span style="color:var(--stim)">stimulated</span> · ${cond.rates[i].toFixed(0)} Hz`
+    : `<br>${cond.rates[i].toFixed(1)} Hz`;
+  tip.innerHTML =
+    `<b>${DATA.typeNames[typeIdx[i]] || "untyped"}</b> ${SIDES[side[i]]}` +
+    `<br><span class="m">${DATA.superclassNames[superclass[i]] || "no superclass"} · body ${bodyIds[i]}</span>` +
+    activity;
+  tip.style.display = "block";
+  const x = Math.min(lastEvent.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  const y = Math.min(lastEvent.clientY + 14, innerHeight - tip.offsetHeight - 8);
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
+}
+
+// ---- Go -----------------------------------------------------------------------
+paint();
+$("loading").remove();
+renderer.setAnimationLoop(() => {
+  controls.update();
+  hover();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

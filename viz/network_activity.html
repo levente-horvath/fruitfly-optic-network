@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fly Eye Network in Action</title>
+<style>
+  :root {
+    --bg: #0b0c0e;
+    --panel: rgba(16, 18, 22, 0.86);
+    --line: rgba(255, 255, 255, 0.08);
+    --text: #e8e9eb;
+    --muted: #8b9099;
+    --blue: #3987e5;
+    --red: #e66767;
+    --mid: #383835;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  canvas.stage { display: block; }
+  .panel {
+    position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); padding: 14px 16px;
+  }
+  #info { top: 16px; left: 16px; width: 320px; max-height: calc(100% - 32px); overflow-y: auto; }
+  #readout { top: 16px; right: 16px; width: 270px; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  h2 { font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 7px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .examples { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .example {
+    display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 2px 5px;
+    border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--muted);
+    font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; overflow: hidden;
+  }
+  .example canvas { width: 40px; height: 40px; image-rendering: pixelated; border-radius: 4px; }
+  .example.on { border-color: rgba(255, 255, 255, 0.35); background: rgba(255, 255, 255, 0.05); color: var(--text); }
+  #eye { display: block; width: 100%; height: 250px; }
+  .transport { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .transport button, select {
+    height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px;
+    background: rgba(255, 255, 255, 0.05); color: var(--text); font: inherit; cursor: pointer;
+  }
+  #play { width: 64px; }
+  input[type="range"] { flex: 1; accent-color: var(--blue); }
+  #clock { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .seg { display: flex; gap: 3px; padding: 3px; background: rgba(255, 255, 255, 0.04); border-radius: 8px; }
+  .seg button { flex: 1; padding: 6px 4px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+  .seg button.on { background: rgba(255, 255, 255, 0.11); color: var(--text); }
+  .legend-bar { height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--blue), var(--mid) 50%, var(--red)); }
+  .legend-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .note { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+  #prediction { font-size: 14px; font-weight: 600; margin: 2px 0 10px; min-height: 1.45em; }
+  #prediction .detail { display: block; font-size: 12px; font-weight: 400; color: var(--muted); }
+  .bar-row { display: grid; grid-template-columns: 84px 1fr 36px; align-items: center; gap: 8px; height: 20px; font-size: 12px; }
+  .bar-row .name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-row.truth .name { color: var(--text); }
+  .bar-row .track { position: relative; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); overflow: hidden; }
+  .bar-row .fill { position: absolute; inset: 0 auto 0 0; border-radius: 0 4px 4px 0; background: var(--blue); opacity: 0.4; }
+  .bar-row.top .fill { opacity: 1; }
+  .bar-row .value { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .depth-row { display: grid; grid-template-columns: 16px 1fr auto; gap: 6px; font-size: 12px; margin: 3px 0; }
+  .depth-row .n, .depth-row .count { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #tip { display: none; pointer-events: none; padding: 8px 10px; font-size: 12px; max-width: 280px; }
+  #tip .m { color: var(--muted); }
+  #help { bottom: 16px; left: 50%; transform: translateX(-50%); padding: 7px 12px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; color: var(--muted); }
+  @media (max-width: 900px) {
+    #readout { top: auto; bottom: 16px; right: 16px; }
+    #help { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="loading">Loading the fly's optic lobe…</div>
+
+<div id="info" class="panel">
+  <h1>Fly eye network in action</h1>
+  <div class="sub">Right-eye optic lobe from the male fly connectome · 49,401 neurons, untrained wiring</div>
+
+  <h2>Image</h2>
+  <div class="examples" id="examples"></div>
+
+  <h2>What the eye sees</h2>
+  <canvas id="eye"></canvas>
+  <div class="transport">
+    <button id="play">Pause</button>
+    <input id="scrub" type="range" min="0" step="1">
+    <select id="speed" aria-label="Playback speed">
+      <option value="0.05">1/20×</option>
+      <option value="0.1" selected>1/10×</option>
+      <option value="0.25">1/4×</option>
+    </select>
+  </div>
+  <div id="clock"><span id="time"></span><span id="phase"></span></div>
+
+  <h2>View</h2>
+  <div class="seg" id="views">
+    <button data-view="layers" class="on">Network layers</button>
+    <button data-view="brain">In the fly's brain</button>
+  </div>
+  <h2>Network layers, front to back</h2>
+  <div id="depths"></div>
+
+  <h2>Neuron activity vs. rest</h2>
+  <div class="legend-bar"></div>
+  <div class="legend-labels"><span>Rate drops</span><span>No change</span><span>Rate rises</span></div>
+
+  <div class="note" id="note"></div>
+</div>
+
+<div id="readout" class="panel">
+  <h2 style="margin-top:0">Classifier reading the output neurons</h2>
+  <div id="prediction"></div>
+  <div id="bars"></div>
+</div>
+
+<div id="tip" class="panel"></div>
+<div id="help" class="panel">Drag to rotate · scroll to zoom · right-drag to pan · hover a neuron · space to play/pause</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const DATA = __PAYLOAD__;
+
+function decode(b64, Type) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Type(bytes.buffer);
+}
+const $ = id => document.getElementById(id);
+const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+// ---- Data -------------------------------------------------------------------
+const net = DATA.network;
+const N = net.count;
+const layerPos = decode(net.layer, Float32Array);
+const brainRaw = decode(net.brain, Float32Array);
+const typeIdx = decode(net.type, Uint16Array);
+const depth = decode(net.depth, Uint8Array);
+const bodyIds = decode(net.bodyIds, Float64Array);
+const hasBrain = new Uint8Array(N);
+const brainPos = new Float32Array(N * 3);
+for (let i = 0; i < N; i++) {
+  hasBrain[i] = Number.isFinite(brainRaw[3 * i]) ? 1 : 0;
+  for (let k = 0; k < 3; k++) brainPos[3 * i + k] = hasBrain[i] ? brainRaw[3 * i + k] : layerPos[3 * i + k];
+}
+const contextPos = decode(DATA.context.brain, Float32Array);
+const columns = decode(DATA.columns, Float32Array);
+const C = columns.length / 2;
+const examples = DATA.examples.map(e => ({
+  ...e,
+  image: decode(e.image, Uint8Array),
+  stimulus: decode(e.stimulus, Uint8Array),
+  activity: decode(e.activity, Int8Array),
+  scores: decode(e.scores, Float32Array),
+}));
+
+// ---- Scene ------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x0b0c0e);
+renderer.domElement.className = "stage";
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 1, 50000);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+const vertexShader = `
+  attribute vec3 tint;
+  attribute float size;
+  uniform float scale;
+  varying vec3 vTint;
+  void main() {
+    vTint = tint;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_PointSize = size <= 0.0 ? 0.0 : max(1.2, size * scale / -mv.z);
+    gl_Position = projectionMatrix * mv;
+  }`;
+const fragmentShader = `
+  uniform float fade;
+  varying vec3 vTint;
+  void main() {
+    float d = length(gl_PointCoord - 0.5);
+    if (d > 0.5) discard;
+    gl_FragColor = vec4(vTint * fade * smoothstep(0.5, 0.05, d), 1.0);
+  }`;
+const makeMaterial = fade => new THREE.ShaderMaterial({
+  uniforms: { scale: { value: 1 }, fade: { value: fade } },
+  vertexShader, fragmentShader,
+  blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+});
+
+const positions = new Float32Array(layerPos);
+const tint = new Float32Array(N * 3);
+const size = new Float32Array(N);
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute("tint", new THREE.BufferAttribute(tint, 3));
+geometry.setAttribute("size", new THREE.BufferAttribute(size, 1));
+const material = makeMaterial(1);
+const cloud = new THREE.Points(geometry, material);
+scene.add(cloud);
+
+const contextN = contextPos.length / 3;
+const contextGeometry = new THREE.BufferGeometry();
+contextGeometry.setAttribute("position", new THREE.BufferAttribute(contextPos, 3));
+contextGeometry.setAttribute("tint", new THREE.BufferAttribute(new Float32Array(contextN * 3).fill(0.15), 3));
+contextGeometry.setAttribute("size", new THREE.BufferAttribute(new Float32Array(contextN).fill(3.6), 1));
+const contextMaterial = makeMaterial(0);
+const context = new THREE.Points(contextGeometry, contextMaterial);
+context.visible = false;
+scene.add(context);
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  const s = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+  material.uniforms.scale.value = s;
+  contextMaterial.uniforms.scale.value = s;
+}
+addEventListener("resize", resize);
+resize();
+
+function radius(array) {
+  let r = 0;
+  for (let i = 0; i < array.length; i += 3) r = Math.max(r, Math.hypot(array[i], array[i + 1], array[i + 2]));
+  return r;
+}
+const VIEWS = {
+  layers: { radius: radius(layerPos), direction: new THREE.Vector3(1.0, 0.55, 0.9).normalize() },
+  brain: { radius: radius(brainPos), direction: new THREE.Vector3(0, 0.08, 1).normalize() },
+};
+function frameCamera(view) {
+  const v = VIEWS[view];
+  const distance = v.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov) / 2) * 1.35;
+  camera.position.copy(v.direction).multiplyScalar(distance);
+  controls.target.set(0, 0, 0);
+}
+
+// ---- State ------------------------------------------------------------------
+const state = { example: 0, frame: 0, time: 0, playing: true, speed: 0.1, view: "layers", blend: 0 };
+let repaint = true;
+const RED = hex("#e66767"), BLUE = hex("#3987e5"), IDLE = [0.13, 0.14, 0.16];
+const current = () => examples[state.example];
+
+function paint() {
+  const ex = current();
+  const offset = state.frame * N;
+  const hide = ease(state.blend);
+  for (let i = 0; i < N; i++) {
+    const v = ex.activity[offset + i] / 127;
+    const a = Math.min(1, Math.abs(v) * 1.3);
+    const pole = v >= 0 ? RED : BLUE;
+    for (let k = 0; k < 3; k++) tint[3 * i + k] = IDLE[k] + (pole[k] - IDLE[k]) * a;
+    size[i] = (3.4 + 12 * a) * (hasBrain[i] ? 1 : 1 - hide);
+  }
+  geometry.attributes.tint.needsUpdate = true;
+  geometry.attributes.size.needsUpdate = true;
+}
+
+function updatePositions() {
+  const b = ease(state.blend);
+  for (let k = 0; k < positions.length; k++) positions[k] = layerPos[k] + (brainPos[k] - layerPos[k]) * b;
+  geometry.attributes.position.needsUpdate = true;
+  contextMaterial.uniforms.fade.value = b;
+  context.visible = b > 0.001;
+}
+
+// ---- Eye ----------------------------------------------------------------------
+const eye = $("eye");
+const eyeCtx = eye.getContext("2d");
+let eyeLayout = null;
+function layoutEye() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  eye.width = eye.clientWidth * dpr;
+  eye.height = eye.clientHeight * dpr;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let c = 0; c < C; c++) {
+    minX = Math.min(minX, columns[2 * c]); maxX = Math.max(maxX, columns[2 * c]);
+    minY = Math.min(minY, columns[2 * c + 1]); maxY = Math.max(maxY, columns[2 * c + 1]);
+  }
+  const scale = Math.min(eye.width / (maxX - minX + 1.2), eye.height / (maxY - minY + 1.2));
+  const corners = [...Array(6)].map((_, k) => {
+    const angle = Math.PI / 2 + (k * Math.PI) / 3;
+    return [Math.cos(angle) * scale / Math.sqrt(3) * 1.02, -Math.sin(angle) * scale / Math.sqrt(3) * 1.02];
+  });
+  eyeLayout = { scale, corners, cx: eye.width / 2 - (minX + maxX) / 2 * scale, cy: eye.height / 2 + (minY + maxY) / 2 * scale };
+}
+function drawEye() {
+  if (!eyeLayout) layoutEye();
+  const { scale, corners, cx, cy } = eyeLayout;
+  const frame = current().stimulus;
+  const offset = state.frame * C;
+  eyeCtx.clearRect(0, 0, eye.width, eye.height);
+  for (let c = 0; c < C; c++) {
+    const g = frame[offset + c];
+    const x = cx + columns[2 * c] * scale, y = cy - columns[2 * c + 1] * scale;
+    eyeCtx.beginPath();
+    eyeCtx.moveTo(x + corners[0][0], y + corners[0][1]);
+    for (let k = 1; k < 6; k++) eyeCtx.lineTo(x + corners[k][0], y + corners[k][1]);
+    eyeCtx.fillStyle = `rgb(${g},${g},${g})`;
+    eyeCtx.fill();
+  }
+}
+addEventListener("resize", () => { eyeLayout = null; drawEye(); });
+
+// ---- Panels -------------------------------------------------------------------
+examples.forEach((ex, i) => {
+  const button = document.createElement("button");
+  button.className = "example";
+  const thumb = document.createElement("canvas");
+  thumb.width = thumb.height = 28;
+  const img = thumb.getContext("2d").createImageData(28, 28);
+  for (let p = 0; p < 784; p++) img.data.set([ex.image[p], ex.image[p], ex.image[p], 255], 4 * p);
+  thumb.getContext("2d").putImageData(img, 0, 0);
+  const label = document.createElement("span");
+  label.textContent = ex.dataset === "moving-mnist" ? `Moving ${ex.name}` : ex.name;
+  button.append(thumb, label);
+  button.title = `${ex.dataset} test image #${ex.testIndex}`;
+  button.onclick = () => selectExample(i);
+  $("examples").append(button);
+});
+
+function selectExample(i) {
+  state.example = i;
+  [...$("examples").children].forEach((b, k) => b.classList.toggle("on", k === i));
+  const ex = current();
+  $("scrub").max = ex.frames * ex.frameMs - 1;
+  const names = DATA.classNames[ex.dataset];
+  $("bars").innerHTML = names.map((name, k) =>
+    `<div class="bar-row${k === ex.label ? " truth" : ""}"><span class="name">${name}${k === ex.label ? " ●" : ""}</span>` +
+    `<span class="track"><span class="fill" style="width:0%"></span></span><span class="value"></span></div>`
+  ).join("");
+  state.time = Math.min(state.time, ex.frames * ex.frameMs - 1);
+  setFrame(Math.floor(state.time / ex.frameMs), true);
+}
+
+function renderReadout() {
+  const ex = current();
+  const names = DATA.classNames[ex.dataset];
+  const rows = [...$("bars").children];
+  if (state.frame < ex.blankFrames) {
+    $("prediction").innerHTML = `Waiting for the image<span class="detail">● marks the true class: ${names[ex.label]}</span>`;
+    rows.forEach(row => {
+      row.classList.remove("top");
+      row.querySelector(".fill").style.width = "0%";
+      row.querySelector(".value").textContent = "";
+    });
+    return;
+  }
+  const s = ex.scores.subarray(state.frame * 10, state.frame * 10 + 10);
+  let top = 0;
+  for (let k = 1; k < 10; k++) if (s[k] > s[top]) top = k;
+  const verdict = top === ex.label ? "correct" : `true class: ${names[ex.label]}`;
+  $("prediction").innerHTML = `${names[top]}<span class="detail">${verdict} · after ${(state.frame - ex.blankFrames + 1) * ex.frameMs} ms of image</span>`;
+  rows.forEach((row, k) => {
+    row.classList.toggle("top", k === top);
+    row.querySelector(".fill").style.width = `${Math.max(0, Math.min(1, s[k])) * 100}%`;
+    row.querySelector(".value").textContent = s[k].toFixed(2);
+  });
+}
+
+function setFrame(f, force = false) {
+  const ex = current();
+  f = Math.max(0, Math.min(ex.frames - 1, f));
+  if (f === state.frame && !force) return;
+  state.frame = f;
+  repaint = true;
+  drawEye();
+  renderReadout();
+  $("scrub").value = Math.floor(state.time);
+  $("time").textContent = `${f * ex.frameMs} ms`;
+  $("phase").textContent = f < ex.blankFrames ? "blank screen" : ex.dataset === "moving-mnist" ? "digit drifting" : "image on · jittering";
+}
+
+function setPlaying(playing) {
+  state.playing = playing;
+  $("play").textContent = playing ? "Pause" : "Play";
+}
+$("play").onclick = () => setPlaying(!state.playing);
+$("scrub").oninput = e => { setPlaying(false); state.time = +e.target.value; setFrame(Math.floor(state.time / current().frameMs)); };
+$("speed").onchange = e => { state.speed = +e.target.value; };
+addEventListener("keydown", e => {
+  if (e.code === "Space" && e.target.tagName !== "INPUT" && e.target.tagName !== "SELECT") { e.preventDefault(); setPlaying(!state.playing); }
+});
+[...$("views").children].forEach(button => button.onclick = () => {
+  state.view = button.dataset.view;
+  [...$("views").children].forEach(b => b.classList.toggle("on", b === button));
+  frameCamera(state.view);
+});
+
+const withBrain = hasBrain.reduce((a, b) => a + b, 0);
+$("note").textContent =
+  `Layers: each neuron sits at its eye column (cells without one are placed by where their synaptic partners are), ` +
+  `stacked by synapses from the image. Brain: the ${withBrain.toLocaleString("en-US")} network neurons with a cell body ` +
+  `in the imaged volume, among ${contextN.toLocaleString("en-US")} other neurons of the fly's central nervous system. ` +
+  `Rates come from our frozen rate model; the classifier was trained on 10,000 other images.`;
+
+// ---- Layer legend (in the panel; floating labels collided with the cloud) --------------
+$("depths").innerHTML = net.depthNames.map((name, d) => {
+  const count = depth.reduce((n, v) => n + (v === d), 0);
+  return `<div class="depth-row"><span class="n">${d + 1}</span><span>${name}</span><span class="count">${count.toLocaleString("en-US")}</span></div>`;
+}).join("");
+
+// ---- Hover --------------------------------------------------------------------------
+const raycaster = new THREE.Raycaster();
+raycaster.params.Points.threshold = 6;
+const pointer = new THREE.Vector2();
+let lastEvent = null, pointerDirty = false, pointerDown = false;
+renderer.domElement.addEventListener("pointermove", e => { lastEvent = e; pointerDirty = true; });
+renderer.domElement.addEventListener("pointerdown", () => { pointerDown = true; $("tip").style.display = "none"; });
+addEventListener("pointerup", () => { pointerDown = false; });
+renderer.domElement.addEventListener("pointerleave", () => { $("tip").style.display = "none"; });
+
+function hover() {
+  if (!pointerDirty || pointerDown || !lastEvent) return;
+  pointerDirty = false;
+  pointer.set((lastEvent.clientX / innerWidth) * 2 - 1, -(lastEvent.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObject(cloud).filter(h => size[h.index] > 0);
+  const tip = $("tip");
+  if (!hits.length) { tip.style.display = "none"; return; }
+  const i = hits.reduce((a, b) => (b.distanceToRay < a.distanceToRay ? b : a)).index;
+  const v = current().activity[state.frame * N + i] / 127;
+  const change = Math.sign(v) * v * v * DATA.deltaScale;
+  tip.innerHTML =
+    `<b>${net.typeNames[typeIdx[i]] || "untyped"}</b> <span class="m">· ${net.superclass[i]}</span>` +
+    `<br><span class="m">${net.depthNames[depth[i]]} · body ${bodyIds[i]}</span>` +
+    `<br>rate ${change >= 0 ? "+" : "−"}${Math.abs(change).toFixed(3)} vs. rest`;
+  tip.style.display = "block";
+  tip.style.left = `${Math.min(lastEvent.clientX + 14, innerWidth - tip.offsetWidth - 8)}px`;
+  tip.style.top = `${Math.min(lastEvent.clientY + 14, innerHeight - tip.offsetHeight - 8)}px`;
+}
+
+// ---- Go -------------------------------------------------------------------------------
+frameCamera("layers");
+selectExample(0);
+$("loading").remove();
+let last = performance.now();
+renderer.setAnimationLoop(now => {
+  const elapsed = Math.min(100, now - last);
+  last = now;
+  const ex = current();
+  if (state.playing) {
+    state.time = (state.time + elapsed * state.speed) % (ex.frames * ex.frameMs);
+    setFrame(Math.floor(state.time / ex.frameMs));
+  }
+  const target = state.view === "brain" ? 1 : 0;
+  if (state.blend !== target) {
+    state.blend = target > state.blend ? Math.min(1, state.blend + elapsed / 900) : Math.max(0, state.blend - elapsed / 900);
+    updatePositions();
+    repaint = true;
+  }
+  if (repaint) { paint(); repaint = false; }
+  controls.update();
+  hover();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

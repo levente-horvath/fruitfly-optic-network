@@ -1,0 +1,279 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Play the connectome</title>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  :root {
+    --surface: #fcfcfb; --panel: #f4f3ef; --grid: #e1e0d9; --axis: #c3c2b7;
+    --muted: #898781; --secondary: #52514e; --primary: #0b0b0b;
+    --you: #2a78d6; --fly: #eb6834; --dark-square: #d8d6cd;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Helvetica Neue", Arial, sans-serif; background: var(--surface);
+         color: var(--primary); display: grid; grid-template-columns: 420px 1fr; height: 100vh; }
+  #left { padding: 20px 22px; overflow-y: auto; border-right: 1px solid var(--grid); }
+  h1 { font-size: 17px; margin: 0 0 14px; }
+  .sub { font-size: 12px; color: var(--secondary); line-height: 1.45; margin-bottom: 16px; }
+  #board { display: grid; grid-template-columns: repeat(8, 1fr); width: min(376px, 100%);
+           aspect-ratio: 1; border: 1px solid var(--axis); }
+  .sq { position: relative; display: flex; align-items: center; justify-content: center; }
+  .sq.dark { background: var(--dark-square); cursor: pointer; }
+  .sq.light { background: var(--surface); }
+  .piece { width: 68%; height: 68%; border-radius: 50%; }
+  .piece.king { width: 84%; height: 84%; box-shadow: inset 0 0 0 4px rgba(255,255,255,.65); }
+  .piece.you { background: var(--you); }
+  .piece.fly { background: var(--fly); }
+  .sq.from { outline: 3px solid var(--you); outline-offset: -3px; }
+  .sq.to::after { content: ""; position: absolute; width: 26%; height: 26%; border-radius: 50%;
+                  background: var(--you); opacity: .45; }
+  .sq.played { background: #e8e2cf; }
+  #status { margin: 14px 0 10px; font-size: 13px; min-height: 20px; color: var(--secondary); }
+  #status b { color: var(--primary); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); padding: 6px 0; font-size: 11px;
+       border-bottom: 1px solid var(--grid); }
+  td { padding: 4px 0; color: var(--secondary); border-bottom: 1px solid var(--grid); }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.best td { color: var(--primary); font-weight: 600; }
+  .bar { height: 5px; background: var(--fly); border-radius: 3px; display: inline-block; vertical-align: middle; }
+  button { font: inherit; font-size: 12px; padding: 6px 12px; border: 1px solid var(--axis);
+           background: var(--surface); border-radius: 6px; cursor: pointer; color: var(--secondary); }
+  #right { position: relative; }
+  #cloud { position: absolute; inset: 0; }
+  #overlay { position: absolute; top: 14px; left: 14px; font-size: 12px; color: #a8a7b4;
+             pointer-events: none; line-height: 1.5; background: rgba(14,14,22,.72);
+             padding: 9px 13px; border-radius: 8px; }
+  #overlay b { color: #f2f1ee; font-size: 13px; }
+  #legend { position: absolute; bottom: 14px; left: 14px; font-size: 11px; color: #85848f;
+            background: rgba(14,14,22,.72); padding: 7px 12px; border-radius: 8px; }
+  .swatch { display: inline-block; width: 22px; height: 6px; border-radius: 3px; vertical-align: middle; }
+  /* Narrow panes: stack the board above the nervous system instead of squeezing the cloud to nothing */
+  @media (max-width: 860px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 72vh; height: auto; min-height: 100vh; }
+    #left { border-right: none; border-bottom: 1px solid var(--grid); padding: 16px; }
+    #overlay, #legend { font-size: 11px; }
+  }
+</style>
+
+<div id="left">
+  <h1>Play the connectome</h1>
+  <div id="board"></div>
+  <div id="status">Click one of your pieces.</div>
+  <button id="again">New game</button>
+  <table id="candidates" style="margin-top:16px">
+    <thead><tr><th>What the fly considered</th><th class="n">its score</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div id="right">
+  <div id="cloud"></div>
+  <div id="overlay"><b>The male CNS connectome</b><br><span id="cloudnote">waiting for the fly's first move</span></div>
+  <div id="legend">
+    <span class="swatch" style="background:linear-gradient(90deg,#1a1a2e,#2a78d6,#eda100,#fff)"></span>
+    rate above rest &nbsp;·&nbsp;
+    <span class="swatch" style="background:#333547"></span> traced but not simulated
+    &nbsp;·&nbsp; drag to rotate, scroll to zoom
+  </div>
+</div>
+
+<script>
+const DATA = __PAYLOAD__;
+const decode = (b64, Type) => {
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Type(bytes.buffer);
+};
+const half = (u16) => {  // float16 -> float32
+  const e = (u16 & 0x7c00) >> 10, f = u16 & 0x03ff, s = u16 >> 15 ? -1 : 1;
+  if (e === 0) return s * 6.103515625e-5 * (f / 1024);
+  if (e === 31) return f ? NaN : s * Infinity;
+  return s * Math.pow(2, e - 15) * (1 + f / 1024);
+};
+
+const positions = decode(DATA.positions, Float32Array);
+const simulated = decode(DATA.simulated, Int32Array);   // -1 where the neuron is not simulated
+const isVpn = decode(DATA.isVpn, Uint8Array);
+const rest = decode(DATA.rest, Uint16Array);
+const N = DATA.neurons;
+const UNLIT = [0.055, 0.06, 0.085];                      // the rest of the nervous system: dark, and
+// kept dark deliberately -- points blend additively, so dense unlit regions otherwise burn out to white
+
+/* ---------- the board ---------- */
+const boardEl = document.getElementById("board");
+const statusEl = document.getElementById("status");
+const tbody = document.querySelector("#candidates tbody");
+let game = DATA.start, selected = null, busy = false, lastFlyMove = [];
+
+const rowcol = (sq) => { const r = Math.floor(sq / 4); return [r, 2 * (sq % 4) + (1 - r % 2)]; };
+const squareAt = (r, c) => ((r + c) % 2 === 1 ? r * 4 + Math.floor(c / 2) : -1);
+
+function draw() {
+  boardEl.innerHTML = "";
+  const destinations = selected === null ? [] :
+    game.legal.filter(p => p[0] === selected).map(p => p[p.length - 1]);
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const sq = squareAt(r, c), el = document.createElement("div");
+    el.className = "sq " + (sq >= 0 ? "dark" : "light");
+    if (sq >= 0 && lastFlyMove.includes(sq)) el.classList.add("played");
+    if (sq === selected) el.classList.add("from");
+    if (destinations.includes(sq)) el.classList.add("to");
+    const v = sq >= 0 ? game.board[r][c] : 0;
+    if (v) {
+      const p = document.createElement("div");
+      p.className = "piece " + (v > 0 ? "you" : "fly") + (Math.abs(v) === 2 ? " king" : "");
+      el.appendChild(p);
+    }
+    if (sq >= 0) el.onclick = () => click(sq);
+    boardEl.appendChild(el);
+  }
+}
+
+function click(sq) {
+  if (busy || game.over) return;
+  const move = selected === null ? null :
+    game.legal.find(p => p[0] === selected && p[p.length - 1] === sq);
+  if (move) return send(move);
+  selected = game.legal.some(p => p[0] === sq) ? sq : null;
+  statusEl.textContent = selected === null ? "That piece has no legal move." :
+    (game.legal.some(p => p[0] === selected && p.length > 2) ? "Multi-jump: click the final square." :
+     "Now click where it goes.");
+  draw();
+}
+
+function applyLocally(path) {
+  /* show the move at once; the server is authoritative and its reply replaces this */
+  const [from, to] = [path[0], path[path.length - 1]];
+  const [fr, fc] = rowcol(from), [tr, tc] = rowcol(to);
+  game.board[tr][tc] = (tr === 0 ? 2 : game.board[fr][fc]);
+  game.board[fr][fc] = 0;
+  for (let i = 0; i < path.length - 1; i++) {  // a jump removes what it passed over
+    const [ar, ac] = rowcol(path[i]), [br, bc] = rowcol(path[i + 1]);
+    if (Math.abs(ar - br) === 2) game.board[(ar + br) / 2][(ac + bc) / 2] = 0;
+  }
+}
+
+async function send(path) {
+  busy = true; selected = null; lastFlyMove = []; applyLocally(path); draw();
+  statusEl.innerHTML = "The fly is looking at the board&hellip;";
+  const res = await fetch("/api/move", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ position: game.position, path }),
+  });
+  const reply = await res.json();
+  busy = false;
+  if (reply.error) { statusEl.textContent = reply.error; return draw(); }
+
+  game = reply;
+  lastFlyMove = reply.flyMove || [];
+  if (reply.rates) paint(decode(reply.rates, Uint16Array));
+  showCandidates(reply);
+  statusEl.innerHTML = reply.outcome ? `<b>${reply.outcome}</b>` :
+    `The fly simulated <b>${reply.boards}</b> board${reply.boards === 1 ? "" : "s"} in ` +
+    `<b>${reply.seconds.toFixed(1)}s</b>. Your turn.`;
+  draw();
+}
+
+function showCandidates(reply) {
+  if (!reply.candidates) return;
+  const top = reply.candidates.map(c => c.score);
+  const lo = Math.min(...top), hi = Math.max(...top), span = Math.max(hi - lo, 1e-6);
+  tbody.innerHTML = "";
+  for (const c of reply.candidates) {
+    const tr = document.createElement("tr");
+    if (c.path.join() === reply.flyMove.join()) tr.className = "best";
+    const width = 4 + 54 * (c.score - lo) / span;
+    tr.innerHTML = `<td>${c.path.join(" → ")}</td>` +
+      `<td class="n"><span class="bar" style="width:${width}px"></span> ${c.score.toFixed(3)}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+/* ---------- the optic lobe ---------- */
+const host = document.getElementById("cloud");
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setClearColor(0x14141c, 1);
+host.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 1, 20000);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+const tint = new Float32Array(N * 3);
+geometry.setAttribute("tint", new THREE.BufferAttribute(tint, 3));
+const material = new THREE.ShaderMaterial({
+  uniforms: { scale: { value: 500 } },
+  vertexShader: `attribute vec3 tint; varying vec3 vTint; uniform float scale;
+    void main() { vTint = tint; vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = max(1.4, scale / -mv.z); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `varying vec3 vTint;
+    void main() { vec2 d = gl_PointCoord - vec2(0.5); if (dot(d, d) > 0.25) discard;
+      gl_FragColor = vec4(vTint, 1.0); }`,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+});
+scene.add(new THREE.Points(geometry, material));
+
+geometry.computeBoundingSphere();
+const sphere = geometry.boundingSphere;
+const fit = sphere.radius / Math.sin(THREE.MathUtils.degToRad(camera.fov) / 2) * 1.15;
+camera.position.set(sphere.center.x + fit * 0.45, sphere.center.y + fit * 0.12, sphere.center.z + fit * 0.9);
+controls.target.copy(sphere.center);
+
+function resize() {
+  const w = host.clientWidth, h = host.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize); resize();
+
+// dark blue -> blue -> yellow -> white, so rest reads as near-black and the driven cells glow
+function heat(t, out, i) {
+  const stops = [[0.10, 0.10, 0.18], [0.16, 0.47, 0.84], [0.93, 0.63, 0.00], [1, 1, 0.95]];
+  const x = Math.max(0, Math.min(0.999, t)) * 3, k = Math.floor(x), f = x - k;
+  for (let c = 0; c < 3; c++) out[i * 3 + c] = stops[k][c] + f * (stops[k + 1][c] - stops[k][c]);
+}
+
+function paint(halves) {
+  /* what the readout sees is the rate above rest, so that is what the cloud shows */
+  const drive = new Float32Array(N).fill(NaN);
+  const inside = [];
+  let driven = 0;
+  for (let i = 0; i < N; i++) {
+    const j = simulated[i];
+    if (j < 0) continue;
+    drive[i] = half(halves[j]) - half(rest[j]);
+    inside.push(drive[i]);
+    if (Math.abs(drive[i]) > 0.01) driven++;
+  }
+  // a handful of cells are driven far harder than the rest, so scale to the 99.5th percentile
+  const ranked = Float32Array.from(inside).sort();
+  const top = ranked[Math.floor(ranked.length * 0.995)] || 1;
+  for (let i = 0; i < N; i++) {
+    if (simulated[i] < 0) { for (let c = 0; c < 3; c++) tint[i * 3 + c] = UNLIT[c]; continue; }
+    heat(Math.min(Math.max(drive[i], 0) / top, 1) ** 0.7, tint, i);
+  }
+  geometry.attributes.tint.needsUpdate = true;
+  document.getElementById("cloudnote").innerHTML =
+    `${DATA.neurons.toLocaleString()} of ${DATA.traced.toLocaleString()} traced neurons have a soma to draw<br>` +
+    `${DATA.simCount.toLocaleString()} of them are in the simulated right eye, and ` +
+    `${driven.toLocaleString()} moved off their resting rate`;
+}
+
+(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+
+/* ---------- start ---------- */
+for (let i = 0; i < N; i++) {
+  const j = simulated[i];
+  if (j < 0) { for (let c = 0; c < 3; c++) tint[i * 3 + c] = UNLIT[c]; }
+  else heat(isVpn[j] ? 0.30 : 0.10, tint, i);
+}
+geometry.attributes.tint.needsUpdate = true;
+document.getElementById("again").onclick = () => {
+  game = DATA.start; selected = null; lastFlyMove = []; tbody.innerHTML = "";
+  statusEl.textContent = "Click one of your pieces."; draw();
+};
+draw();
+</script>
